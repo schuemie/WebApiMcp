@@ -1,0 +1,20 @@
+[project]
+name = "webapi-mcp"
+version = "0.1.0"
+description = "MCP server bridging GitHub Copilot to OHDSI WebAPI"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "starlette>=0.37",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+webapi-mcp = "webapi_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

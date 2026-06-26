@@ -1,0 +1,133 @@
+import contextlib
+import logging
+from typing import Literal
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+from .auth import ApiKeyMiddleware
+from .config import settings
+from .webapi_client import WebApiClient, WebApiError
+
+log = logging.getLogger("webapi-mcp")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+
+mcp = FastMCP(
+    name="webapi-webapi",
+    instructions=(
+        "Tools for querying an OHDSI WebAPI instance. "
+        "All calls are made on behalf of the user whose personal WebAPI API key "
+        "is configured in the MCP client. Use `concept_search` to find OMOP "
+        "concepts by free-text query, optionally filtered by domain or vocabulary."
+    ),
+)
+
+_client: WebApiClient | None = None
+
+
+def _get_client() -> WebApiClient:
+    global _client
+    if _client is None:
+        _client = WebApiClient()
+    return _client
+
+
+@mcp.tool()
+async def concept_search(
+    query: str = Field(..., description="Free-text search term, e.g. 'metformin'"),
+    source_key: str | None = Field(
+        None,
+        description=(
+            "WebAPI source key for the vocabulary schema. "
+            "Omit to use the server default."
+        ),
+    ),
+    domain: list[str] | None = Field(
+        None,
+        description="Optional OMOP domain filter, e.g. ['Drug'] or ['Condition'].",
+    ),
+    vocabulary: list[str] | None = Field(
+        None,
+        description="Optional vocabulary filter, e.g. ['RxNorm'] or ['SNOMED'].",
+    ),
+    standard_concept: Literal["S", "C", "N"] | None = Field(
+        "S",
+        description="Restrict to Standard ('S'), Classification ('C'), or Non-standard ('N'). Default 'S'.",
+    ),
+    page_size: int = Field(
+        50, ge=1, description="Maximum number of rows to return.",
+    ),
+) -> list[dict]:
+    """Search the OMOP vocabulary for concepts matching `query`."""
+    page_size = min(page_size, settings.max_page_size)
+    skey = source_key or settings.default_source_key
+    try:
+        rows = await _get_client().concept_search(
+            query=query,
+            source_key=skey,
+            domain=domain,
+            vocabulary=vocabulary,
+            standard_concept=standard_concept,
+            page_size=page_size,
+        )
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info(
+        "concept_search query=%r source=%s returned=%d",
+        query, skey, len(rows),
+    )
+    return rows
+
+
+# ---- HTTP app wiring -----------------------------------------------------
+
+async def healthz(_request):
+    return JSONResponse({"status": "ok"})
+
+
+def build_app() -> Starlette:
+    # FastMCP exposes a Streamable HTTP ASGI app at /mcp by default.
+    mcp_app = mcp.streamable_http_app()
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            if _client is not None:
+                await _client.aclose()
+
+    app = Starlette(
+        debug=False,
+        lifespan=lifespan,
+        routes=[
+            Route("/healthz", healthz),
+            # Mount the MCP app at /mcp
+        ],
+    )
+    app.mount("/mcp", mcp_app)
+    app.add_middleware(ApiKeyMiddleware)
+    return app
+
+
+def main() -> None:
+    import uvicorn
+    uvicorn.run(
+        build_app(),
+        host=settings.host,
+        port=settings.port,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",  # trust the TLS-terminating reverse proxy
+    )
+
+
+if __name__ == "__main__":
+    main()
