@@ -11,9 +11,19 @@ class WebApiError(Exception):
 
 class WebApiClient:
     def __init__(self) -> None:
+        # Resolve TLS verification setting. A CA bundle path takes precedence
+        # over the boolean flag, so users with self-signed corporate certs can
+        # just point WEBAPI_MCP_CA_BUNDLE at their PEM file.
+        verify: bool | str
+        if settings.ca_bundle:
+            verify = settings.ca_bundle
+        else:
+            verify = settings.verify_ssl
+
         self._client = httpx.AsyncClient(
             base_url=settings.webapi_base_url.rstrip("/"),
             timeout=settings.request_timeout_s,
+            verify=verify,
         )
 
     async def aclose(self) -> None:

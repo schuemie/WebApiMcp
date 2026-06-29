@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 
 from .auth import ApiKeyMiddleware
 from .config import settings
@@ -92,29 +92,33 @@ async def healthz(_request):
     return JSONResponse({"status": "ok"})
 
 
-def build_app() -> Starlette:
+def build_app() -> ApiKeyMiddleware:
     # FastMCP exposes a Streamable HTTP ASGI app at /mcp by default.
     mcp_app = mcp.streamable_http_app()
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
-        try:
-            yield
-        finally:
-            if _client is not None:
-                await _client.aclose()
+        # Run the FastMCP streamable-HTTP session manager so its internal
+        # task group is initialized; otherwise requests to /mcp fail with
+        # "Task group is not initialized."
+        async with mcp.session_manager.run():
+            try:
+                yield
+            finally:
+                if _client is not None:
+                    await _client.aclose()
 
-    app = Starlette(
+    starlette_app = Starlette(
         debug=False,
         lifespan=lifespan,
         routes=[
             Route("/healthz", healthz),
-            # Mount the MCP app at /mcp
+            # Mount MCP app at root so its internal /mcp route is reachable at /mcp
+            Mount("/", app=mcp_app),
         ],
     )
-    app.mount("/mcp", mcp_app)
-    app.add_middleware(ApiKeyMiddleware)
-    return app
+    # Wrap with pure-ASGI middleware (BaseHTTPMiddleware breaks SSE streaming)
+    return ApiKeyMiddleware(starlette_app)
 
 
 def main() -> None:
