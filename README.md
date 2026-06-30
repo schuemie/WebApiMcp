@@ -45,7 +45,8 @@ The server exposes:
 
 ## Reference this server in MCP.json
 
-Start the server first (see above), then add this entry to your `mcp.json`:
+Start the server first (see above), then add this entry to your `mcp.json`.
+`X-WebAPI-Key` is optional and only needed if your WebAPI instance requires API key auth:
 
 ```json
 {
@@ -53,13 +54,13 @@ Start the server first (see above), then add this entry to your `mcp.json`:
     "webapi-webapi": {
       "type": "http",
       "url": "http://localhost:8765/mcp",
-      "headers": {
-        "X-WebAPI-Key": "<your-webapi-api-key>"
-      }
+      "headers": {}
     }
   }
 }
 ```
+
+If your WebAPI requires API key auth, include `X-WebAPI-Key`.
 
 If you configured `WEBAPI_MCP_SHARED_GATEWAY_SECRET`, also include `X-Gateway-Secret` in the headers:
 

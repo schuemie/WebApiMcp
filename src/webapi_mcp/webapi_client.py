@@ -31,12 +31,10 @@ class WebApiClient:
 
     def _headers(self) -> dict[str, str]:
         key = current_api_key()
-        if not key:
-            raise WebApiError(
-                "No WebAPI API key was supplied. Add `X-WebAPI-Key` to your "
-                "mcp.json headers. See your internal docs for how to mint a key."
-            )
-        return {"X-API-KEY": key, "Accept": "application/json"}
+        headers = {"Accept": "application/json"}
+        if key:
+            headers["X-API-KEY"] = key
+        return headers
 
     async def concept_search(
         self,
@@ -64,8 +62,9 @@ class WebApiClient:
         r = await self._client.post(url, json=body, headers=self._headers())
         if r.status_code == 401:
             raise WebApiError(
-                "WebAPI rejected the API key (401). It may be disabled, expired, "
-                "or unknown. Mint a new one and update mcp.json."
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
             )
         r.raise_for_status()
         rows = r.json()

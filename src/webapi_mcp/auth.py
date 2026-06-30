@@ -22,7 +22,7 @@ class ApiKeyMiddleware:
     are not buffered.
 
     Reads:
-      - X-WebAPI-Key     : the user's personal WebAPI API key (required for /mcp)
+      - X-WebAPI-Key     : optional personal WebAPI API key forwarded upstream
       - X-Gateway-Secret : optional shared secret for an extra perimeter check
     """
 

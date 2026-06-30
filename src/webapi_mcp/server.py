@@ -22,8 +22,8 @@ mcp = FastMCP(
     name="webapi-webapi",
     instructions=(
         "Tools for querying an OHDSI WebAPI instance. "
-        "All calls are made on behalf of the user whose personal WebAPI API key "
-        "is configured in the MCP client. Use `concept_search` to find OMOP "
+        "When provided, calls include the user's personal WebAPI API key from "
+        "the MCP client. Use `concept_search` to find OMOP "
         "concepts by free-text query with various filter options."
     ),
 )
