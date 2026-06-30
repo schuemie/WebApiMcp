@@ -19,12 +19,13 @@ logging.basicConfig(
 )
 
 mcp = FastMCP(
-    name="webapi-webapi",
+    name="ohdsi-webapi",
     instructions=(
         "Tools for querying an OHDSI WebAPI instance. "
         "When provided, calls include the user's personal WebAPI API key from "
-        "the MCP client. Use `concept_search` to find OMOP "
-        "concepts by free-text query with various filter options."
+        "the MCP client. Use `concept_search` to find OMOP concepts by "
+        "free-text query, then use `concept_record_count` to retrieve record "
+        "and person counts for specific concept IDs. "
     ),
 )
 
@@ -68,7 +69,8 @@ async def concept_search(
         50, ge=1, description="Maximum number of rows to return.",
     ),
 ) -> list[dict]:
-    """Search the OMOP vocabulary for concepts matching `query`."""
+    """Find OMOP concepts and their IDs by text with optional vocabulary/domain filters.
+    """
     page_size = min(page_size, settings.max_page_size)
     skey = source_key or settings.default_source_key
     try:
@@ -87,6 +89,48 @@ async def concept_search(
     log.info(
         "concept_search query=%r source=%s returned=%d",
         query, skey, len(rows),
+    )
+    return rows
+
+
+@mcp.tool()
+async def concept_record_count(
+    concept_ids: list[int] = Field(
+        ...,
+        description=(
+            "List of OMOP concept IDs to retrieve counts for, "
+            "e.g. [201826, 201820]."
+        ),
+    ),
+    source_key: str | None = Field(
+        None,
+        description=(
+            "WebAPI source key for counts. Omit to use the server default."
+        ),
+    ),
+) -> list[dict]:
+    """Return CDM concept counts for each requested OMOP concept ID.
+
+    Each returned row includes:
+    - recordCount
+    - recordCountWithDescendants
+    - personCount
+    - personCountWithDescendants
+    """
+    skey = source_key or settings.default_source_key
+    try:
+        rows = await _get_client().concept_record_count(
+            source_key=skey,
+            concept_ids=concept_ids,
+        )
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info(
+        "concept_record_count source=%s requested=%d returned=%d",
+        skey,
+        len(concept_ids),
+        len(rows),
     )
     return rows
 

@@ -83,3 +83,51 @@ class WebApiClient:
             for row in rows
         ]
         return slim[:page_size]
+
+    async def concept_record_count(
+        self,
+        source_key: str,
+        concept_ids: list[int],
+    ) -> list[dict[str, int]]:
+        # WebAPI exposes POST /cdmresults/{sourceKey}/conceptRecordCount with
+        # a raw JSON array body of concept IDs.
+        url = f"/cdmresults/{source_key}/conceptRecordCount"
+        r = await self._client.post(url, json=concept_ids, headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        rows = r.json()
+        # WebAPI returns a list like [{"201826": [recordCount, ...]}].
+        by_concept: dict[int, list[int]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for concept_id, counts in row.items():
+                try:
+                    cid = int(concept_id)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(counts, list) and len(counts) >= 4:
+                    by_concept[cid] = counts
+
+        result: list[dict[str, int]] = []
+        for concept_id in concept_ids:
+            counts = by_concept.get(concept_id)
+            if not counts:
+                continue
+            result.append(
+                {
+                    "conceptId": concept_id,
+                    "recordCount": int(counts[0]),
+                    "recordCountWithDescendants": int(counts[1]),
+                    "personCount": int(counts[2]),
+                    "personCountWithDescendants": int(counts[3]),
+                }
+            )
+
+        return result
