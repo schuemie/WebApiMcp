@@ -24,7 +24,7 @@ mcp = FastMCP(
         "Tools for querying an OHDSI WebAPI instance. "
         "All calls are made on behalf of the user whose personal WebAPI API key "
         "is configured in the MCP client. Use `concept_search` to find OMOP "
-        "concepts by free-text query, optionally filtered by domain or vocabulary."
+        "concepts by free-text query with various filter options."
     ),
 )
 
@@ -47,6 +47,10 @@ async def concept_search(
             "WebAPI source key for the vocabulary schema. "
             "Omit to use the server default."
         ),
+    ),
+    concept_class: list[str] | None = Field(
+        None,
+        description="Optional OMOP concept class filter, e.g. ['Ingredient'] or ['Clinical Finding'].",
     ),
     domain: list[str] | None = Field(
         None,
@@ -71,6 +75,7 @@ async def concept_search(
         rows = await _get_client().concept_search(
             query=query,
             source_key=skey,
+            concept_class=concept_class,
             domain=domain,
             vocabulary=vocabulary,
             standard_concept=standard_concept,

@@ -42,6 +42,7 @@ class WebApiClient:
         self,
         query: str,
         source_key: str,
+        concept_class: list[str] | None,
         domain: list[str] | None,
         vocabulary: list[str] | None,
         standard_concept: str | None,
@@ -50,14 +51,16 @@ class WebApiClient:
         # WebAPI exposes POST /vocabulary/{sourceKey}/search with a filter body.
         # Field names mirror the WebAPI Vocabulary controller.
         body: dict[str, Any] = {"QUERY": query}
+        if concept_class:
+            body["CONCEPT_CLASS_ID"] = concept_class
         if domain:
             body["DOMAIN_ID"] = domain
         if vocabulary:
             body["VOCABULARY_ID"] = vocabulary
         if standard_concept:
-            body["STANDARD_CONCEPT"] = [standard_concept]
+            body["STANDARD_CONCEPT"] = standard_concept
 
-        url = f"/vocabulary/{source_key}/search"
+        url = f"/vocabulary/search"
         r = await self._client.post(url, json=body, headers=self._headers())
         if r.status_code == 401:
             raise WebApiError(
