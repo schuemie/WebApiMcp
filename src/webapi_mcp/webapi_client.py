@@ -82,6 +82,45 @@ class WebApiClient:
             }
             for row in rows
         ]
+
+        concept_ids = list(
+            dict.fromkeys(
+                concept_id
+                for concept_id in (row.get("conceptId") for row in slim)
+                if isinstance(concept_id, int)
+            )
+        )
+        if not concept_ids:
+            return slim[:page_size]
+
+        count_rows = await self.concept_record_count(
+            source_key=source_key,
+            concept_ids=concept_ids,
+        )
+        counts_by_concept = {row["conceptId"]: row for row in count_rows}
+        for row in slim:
+            concept_id = row.get("conceptId")
+            counts = (
+                counts_by_concept.get(concept_id, {})
+                if isinstance(concept_id, int)
+                else {}
+            )
+            row["recordCount"] = counts.get("recordCount")
+            row["recordCountWithDescendants"] = counts.get(
+                "recordCountWithDescendants"
+            )
+            row["personCount"] = counts.get("personCount")
+            row["personCountWithDescendants"] = counts.get(
+                "personCountWithDescendants"
+            )
+        slim.sort(
+            key=lambda row: (
+                row.get("personCountWithDescendants")
+                if isinstance(row.get("personCountWithDescendants"), int)
+                else -1
+            ),
+            reverse=True,
+        )
         return slim[:page_size]
 
     async def concept_record_count(

@@ -69,7 +69,9 @@ async def concept_search(
         50, ge=1, description="Maximum number of rows to return.",
     ),
 ) -> list[dict]:
-    """Find OMOP concepts and their IDs by text with optional vocabulary/domain filters.
+    """
+    Find OMOP concepts and their IDs by text with optional vocabulary/domain filters.
+    The output is reverse sorted by person counts (including descendants).
     """
     page_size = min(page_size, settings.max_page_size)
     skey = source_key or settings.default_source_key
