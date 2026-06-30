@@ -170,3 +170,51 @@ class WebApiClient:
             )
 
         return result
+
+    async def get_sources(self) -> list[dict[str, Any]]:
+        # WebAPI exposes GET /source/sources with source metadata and daimons.
+        r = await self._client.get("/source/sources", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        rows = r.json()
+        if not isinstance(rows, list):
+            return []
+
+        sources: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            daimon_rows = row.get("daimons")
+            daimons: list[dict[str, Any]] = []
+            if isinstance(daimon_rows, list):
+                for daimon in daimon_rows:
+                    if not isinstance(daimon, dict):
+                        continue
+                    daimons.append(
+                        {
+                            "sourceDaimonId": daimon.get("sourceDaimonId"),
+                            "daimonType": daimon.get("daimonType"),
+                            "tableQualifier": daimon.get("tableQualifier"),
+                            "priority": daimon.get("priority"),
+                        }
+                    )
+
+            sources.append(
+                {
+                    "sourceId": row.get("sourceId"),
+                    "sourceName": row.get("sourceName"),
+                    "sourceDialect": row.get("sourceDialect"),
+                    "sourceKey": row.get("sourceKey"),
+                    "daimons": daimons,
+                }
+            )
+
+        return sources
+

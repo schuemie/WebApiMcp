@@ -23,9 +23,7 @@ mcp = FastMCP(
     instructions=(
         "Tools for querying an OHDSI WebAPI instance. "
         "When provided, calls include the user's personal WebAPI API key from "
-        "the MCP client. Use `concept_search` to find OMOP concepts by "
-        "free-text query, then use `concept_record_count` to retrieve record "
-        "and person counts for specific concept IDs. "
+        "the MCP client."
     ),
 )
 
@@ -66,7 +64,7 @@ async def concept_search(
         description="Restrict to Standard ('S'), Classification ('C'), or Non-standard ('N'). Default 'S'.",
     ),
     page_size: int = Field(
-        50, ge=1, description="Maximum number of rows to return.",
+        25, ge=1, description="Maximum number of rows to return.",
     ),
 ) -> list[dict]:
     """
@@ -134,6 +132,18 @@ async def concept_record_count(
         len(concept_ids),
         len(rows),
     )
+    return rows
+
+
+@mcp.tool()
+async def get_sources() -> list[dict]:
+    """List all configured WebAPI data sources and their attached daimons."""
+    try:
+        rows = await _get_client().get_sources()
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info("get_sources returned=%d", len(rows))
     return rows
 
 
