@@ -171,7 +171,7 @@ class WebApiClient:
 
         return result
 
-    async def get_sources(self) -> list[dict[str, Any]]:
+    async def get_sources(self, source_name: str | None = None) -> list[dict[str, Any]]:
         # WebAPI exposes GET /source/sources with source metadata and daimons.
         r = await self._client.get("/source/sources", headers=self._headers())
         if r.status_code == 401:
@@ -186,9 +186,18 @@ class WebApiClient:
         if not isinstance(rows, list):
             return []
 
+        source_name_filter = source_name.lower() if source_name else None
+
         sources: list[dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, dict):
+                continue
+
+            row_source_name = row.get("sourceName")
+            if source_name_filter and (
+                not isinstance(row_source_name, str)
+                or source_name_filter not in row_source_name.lower()
+            ):
                 continue
 
             daimon_rows = row.get("daimons")
@@ -209,7 +218,7 @@ class WebApiClient:
             sources.append(
                 {
                     "sourceId": row.get("sourceId"),
-                    "sourceName": row.get("sourceName"),
+                    "sourceName": row_source_name,
                     "sourceDialect": row.get("sourceDialect"),
                     "sourceKey": row.get("sourceKey"),
                     "daimons": daimons,

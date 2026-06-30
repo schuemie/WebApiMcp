@@ -136,14 +136,22 @@ async def concept_record_count(
 
 
 @mcp.tool()
-async def get_sources() -> list[dict]:
+async def get_sources(
+    source_name: str | None = Field(
+        None,
+        description=(
+            "Optional source name filter. Include only sources "
+            "whose name contains this value (case-insensitive)."
+        ),
+    ),
+) -> list[dict]:
     """List all configured WebAPI data sources and their attached daimons."""
     try:
-        rows = await _get_client().get_sources()
+        rows = await _get_client().get_sources(source_name=source_name)
     except WebApiError as e:
         # Surface a clean, actionable error to the agent
         raise RuntimeError(str(e)) from e
-    log.info("get_sources returned=%d", len(rows))
+    log.info("get_sources filter=%r returned=%d", source_name, len(rows))
     return rows
 
 
