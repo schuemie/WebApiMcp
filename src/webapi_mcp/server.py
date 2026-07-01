@@ -24,6 +24,11 @@ mcp = FastMCP(
         "Tools for querying an OHDSI WebAPI instance. "
         "When provided, calls include the user's personal WebAPI API key from "
         "the MCP client."
+        " "
+        "JSON expressions of cohort definitions and concept sets tend to be large "
+        "so prefer markdown when analysing or displaying them. Users will be "
+        "familiar with the markdown representation as is, so prefer to present them "
+        "without modification."
     ),
 )
 
@@ -168,7 +173,8 @@ async def search_cohort_definition(
         25, ge=1, description="Maximum number of rows to return.",
     ),
 ) -> list[dict]:
-    """Search cohort definitions by numeric ID or free text."""
+    """Search cohort definitions by numeric ID or free text. Returns cohort ID, name,
+     creation and modification date, and creator."""
     page_size = min(page_size, settings.max_page_size)
     try:
         rows = await _get_client().search_cohort_definition(
@@ -202,6 +208,45 @@ async def get_cohort_definition(
 
 
 @mcp.tool()
+async def get_cohort_definition__markdown(
+    cohort_id: int | None = Field(
+        None,
+        description="Cohort definition ID.",
+    ),
+    cohort_definition_expression: Any | None = Field(
+        None,
+        description=(
+            "Cohort definition JSON expression."
+        ),
+    ),
+    include_concept_sets: bool = Field(
+        True,
+        description=(
+            "Include markdown for the concept sets used in the cohort definition."
+        ),
+    ),
+) -> str:
+    """Return print-friendly markdown for a cohort definition.
+
+    Provide either a cohort ID or an expression object.
+    """
+    try:
+        markdown = await _get_client().get_cohort_definition_markdown(
+            cohort_id=cohort_id,
+            cohort_definition_expression=cohort_definition_expression,
+            include_concept_sets=include_concept_sets,
+        )
+    except WebApiError as e:
+        raise RuntimeError(str(e)) from e
+    log.info(
+        "get_cohort_definition__markdown cohort_id=%r include_concept_sets=%s",
+        cohort_id,
+        include_concept_sets,
+    )
+    return markdown
+
+
+@mcp.tool()
 async def get_cohort_definition_meta_data(
     cohort_id: int = Field(..., description="Cohort definition ID."),
 ) -> dict:
@@ -213,6 +258,95 @@ async def get_cohort_definition_meta_data(
         # Surface a clean, actionable error to the agent
         raise RuntimeError(str(e)) from e
     log.info("get_cohort_definition_meta_data cohort_id=%d", cohort_id)
+    return row
+
+
+@mcp.tool()
+async def search_concept_set(
+    query: str = Field(
+        ...,
+        description=(
+            "Concept set ID or free-text query matched against concept set name "
+            "and creator name."
+        ),
+    ),
+    page_size: int = Field(
+        25, ge=1, description="Maximum number of rows to return.",
+    ),
+) -> list[dict]:
+    """Search concept sets by numeric ID or free text. Returns concept set ID,
+     name, creation and modification date, and creator."""
+    page_size = min(page_size, settings.max_page_size)
+    try:
+        rows = await _get_client().search_concept_set(
+            query=query,
+            page_size=page_size,
+        )
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info(
+        "search_concept_set query=%r page_size=%d returned=%d",
+        query,
+        page_size,
+        len(rows),
+    )
+    return rows
+
+
+@mcp.tool()
+async def get_concept_set(
+    concept_set_id: int = Field(..., description="Concept set ID."),
+) -> Any:
+    """Return the concept set expression (JSON) for the given concept set ID."""
+    try:
+        expression = await _get_client().get_concept_set(concept_set_id=concept_set_id)
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info("get_concept_set concept_set_id=%d", concept_set_id)
+    return expression
+
+
+@mcp.tool()
+async def get_concept_set_markdown(
+    concept_set_id: int | None = Field(
+        None,
+        description="Concept set ID.",
+    ),
+    concept_set_expression: Any | None = Field(
+        None,
+        description=(
+            "Concept set JSON expression."
+        ),
+    ),
+) -> str:
+    """Return print-friendly markdown for a concept set.
+
+        Provide either a concept set ID or an expression object."""
+    try:
+        markdown = await _get_client().get_concept_set_markdown(
+            concept_set_id=concept_set_id,
+            concept_set_expression=concept_set_expression,
+        )
+    except WebApiError as e:
+        raise RuntimeError(str(e)) from e
+    log.info("get_concept_set_markdown concept_set_id=%r", concept_set_id)
+    return markdown
+
+
+@mcp.tool()
+async def get_concept_set_meta_data(
+    concept_set_id: int = Field(..., description="Concept set ID."),
+) -> dict:
+    """Return concept set metadata including name, description (if present), creation and modification date,
+    and creator."""
+    try:
+        row = await _get_client().get_concept_set_meta_data(concept_set_id=concept_set_id)
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info("get_concept_set_meta_data concept_set_id=%d", concept_set_id)
     return row
 
 

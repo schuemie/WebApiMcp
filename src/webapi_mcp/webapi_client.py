@@ -86,6 +86,168 @@ class WebApiClient:
                 return value
         return value
 
+    @classmethod
+    def _unwrap_cohort_expression(cls, value: Any) -> Any:
+        parsed = cls._parse_expression(value)
+        if isinstance(parsed, dict) and "expression" in parsed:
+            return cls._parse_expression(parsed.get("expression"))
+        return parsed
+
+    async def _resolve_cohort_expression(
+        self,
+        *,
+        cohort_id: int | None,
+        cohort_definition_expression: Any | None,
+    ) -> dict[str, Any]:
+        if cohort_id is None and cohort_definition_expression is None:
+            raise WebApiError(
+                "Provide either `cohort_id` or `cohort_definition_expression`."
+            )
+        if cohort_id is not None and cohort_definition_expression is not None:
+            raise WebApiError(
+                "Provide only one of `cohort_id` or `cohort_definition_expression`."
+            )
+
+        if cohort_id is not None:
+            expression = await self.get_cohort_definition(cohort_id=cohort_id)
+        else:
+            expression = self._unwrap_cohort_expression(cohort_definition_expression)
+
+        if not isinstance(expression, dict):
+            raise WebApiError(
+                "Cohort definition expression must be a JSON object."
+            )
+        return expression
+
+    async def _get_print_friendly_markdown(self, endpoint: str, payload: Any) -> str:
+        headers = {**self._headers(), "Accept": "text/markdown"}
+        r = await self._client.post(endpoint, json=payload, headers=headers)
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+        return r.text
+
+    async def _resolve_concept_set_payload(
+        self,
+        *,
+        concept_set_id: int | None,
+        concept_set_expression: Any | None,
+    ) -> list[dict[str, Any]]:
+        if concept_set_id is None and concept_set_expression is None:
+            raise WebApiError(
+                "Provide either `concept_set_id` or `concept_set_expression`."
+            )
+        if concept_set_id is not None and concept_set_expression is not None:
+            raise WebApiError(
+                "Provide only one of `concept_set_id` or `concept_set_expression`."
+            )
+
+        if concept_set_id is not None:
+            r = await self._client.get(f"/conceptset/{concept_set_id}", headers=self._headers())
+            if r.status_code == 401:
+                raise WebApiError(
+                    "WebAPI returned 401 (unauthorized). If your instance requires an "
+                    "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                    "it may be disabled, expired, or unknown."
+                )
+            r.raise_for_status()
+
+            row = self._normalize_cohort_definition_payload(r.json())
+            if not row:
+                raise WebApiError("Concept set not found or empty response.")
+            expression = self._parse_expression(row.get("expression"))
+            if not isinstance(expression, dict):
+                raise WebApiError("Concept set expression must be a JSON object.")
+            return [
+                {
+                    "id": row.get("id", concept_set_id),
+                    "name": row.get("name") or f"Concept Set {concept_set_id}",
+                    "expression": expression,
+                }
+            ]
+
+        parsed = self._parse_expression(concept_set_expression)
+        if not isinstance(parsed, dict):
+            raise WebApiError("Concept set expression must be a JSON object.")
+
+        if "expression" in parsed:
+            expression = self._parse_expression(parsed.get("expression"))
+            if not isinstance(expression, dict):
+                raise WebApiError("Concept set expression must be a JSON object.")
+            return [
+                {
+                    "id": parsed.get("id", 0),
+                    "name": parsed.get("name") or "Concept Set",
+                    "expression": expression,
+                }
+            ]
+
+        return [
+            {
+                "id": 0,
+                "name": "Concept Set",
+                "expression": parsed,
+            }
+        ]
+
+    @staticmethod
+    def _fts_search_rows(
+        rows: list[dict[str, Any]],
+        *,
+        id_field: str,
+        indexed_fields: list[str],
+        query_text: str,
+        page_size: int,
+        table_name: str,
+    ) -> list[dict[str, Any]]:
+        tokens = [token for token in query_text.split() if token]
+        if not tokens:
+            return []
+
+        fts_query = " ".join(f'"{token.replace("\"", "\"\"")}"*' for token in tokens)
+        fts_columns = ", ".join(indexed_fields)
+        insert_columns = ", ".join([id_field, *indexed_fields])
+        placeholders = ", ".join("?" for _ in range(len(indexed_fields) + 1))
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                f"CREATE VIRTUAL TABLE {table_name} USING fts5({id_field} UNINDEXED, {fts_columns})"
+            )
+            conn.executemany(
+                f"INSERT INTO {table_name}({insert_columns}) VALUES({placeholders})",
+                [
+                    tuple(
+                        [row[id_field]]
+                        + [
+                            row[field] if isinstance(row.get(field), str) else ""
+                            for field in indexed_fields
+                        ]
+                    )
+                    for row in rows
+                ],
+            )
+
+            matched_ids = [
+                int(result[0])
+                for result in conn.execute(
+                    f"SELECT {id_field} FROM {table_name} WHERE {table_name} MATCH ? "
+                    f"ORDER BY bm25({table_name}), {id_field} LIMIT ?",
+                    (fts_query, page_size),
+                )
+            ]
+        finally:
+            conn.close()
+
+        rank_by_id = {result_id: rank for rank, result_id in enumerate(matched_ids)}
+        matched = [row for row in rows if row[id_field] in rank_by_id]
+        matched.sort(key=lambda row: rank_by_id[row[id_field]])
+        return matched[:page_size]
+
     async def search_concept(
         self,
         query: str,
@@ -313,40 +475,79 @@ class WebApiClient:
         if query_id is not None:
             return [row for row in slim_rows if row["id"] == query_id][:page_size]
 
-        conn = sqlite3.connect(":memory:")
-        try:
-            conn.execute("CREATE VIRTUAL TABLE cohort_fts USING fts5(id UNINDEXED, name, creatorName)")
-            conn.executemany(
-                "INSERT INTO cohort_fts(id, name, creatorName) VALUES(?, ?, ?)",
-                [
-                    (
-                        row["id"],
-                        row["name"] if isinstance(row.get("name"), str) else "",
-                        row["creatorName"] if isinstance(row.get("creatorName"), str) else "",
-                    )
-                    for row in slim_rows
-                ],
+        return self._fts_search_rows(
+            slim_rows,
+            id_field="id",
+            indexed_fields=["name", "creatorName"],
+            query_text=query_text,
+            page_size=page_size,
+            table_name="cohort_fts",
+        )
+
+    async def search_concept_set(
+        self,
+        query: str,
+        page_size: int,
+    ) -> list[dict[str, Any]]:
+        r = await self._client.get("/conceptset", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        rows = r.json()
+        if not isinstance(rows, list):
+            return []
+
+        slim_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            concept_set_id = self._scalar(row.get("id"))
+            try:
+                concept_set_id = int(concept_set_id)
+            except (TypeError, ValueError):
+                continue
+
+            created_by = row.get("createdBy")
+            creator_name = None
+            if isinstance(created_by, dict):
+                creator_name = self._scalar(created_by.get("name"))
+
+            slim_rows.append(
+                {
+                    "id": concept_set_id,
+                    "name": self._scalar(row.get("name")),
+                    "dateCreated": self._iso_utc_from_millis(row.get("createdDate")),
+                    "dateUpdated": self._iso_utc_from_millis(row.get("modifiedDate")),
+                    "creatorName": creator_name,
+                }
             )
 
-            tokens = [token for token in query_text.split() if token]
-            if not tokens:
-                return []
+        query_text = query.strip()
+        if not query_text:
+            return []
 
-            fts_query = " ".join(f'"{token.replace("\"", "\"\"")}"*' for token in tokens)
-            matched_ids = [
-                int(row[0])
-                for row in conn.execute(
-                    "SELECT id FROM cohort_fts WHERE cohort_fts MATCH ? ORDER BY bm25(cohort_fts), id LIMIT ?",
-                    (fts_query, page_size),
-                )
-            ]
-        finally:
-            conn.close()
+        try:
+            query_id = int(query_text)
+        except ValueError:
+            query_id = None
 
-        rank_by_id = {cohort_id: rank for rank, cohort_id in enumerate(matched_ids)}
-        matched = [row for row in slim_rows if row["id"] in rank_by_id]
-        matched.sort(key=lambda row: rank_by_id[row["id"]])
-        return matched[:page_size]
+        if query_id is not None:
+            return [row for row in slim_rows if row["id"] == query_id][:page_size]
+
+        return self._fts_search_rows(
+            slim_rows,
+            id_field="id",
+            indexed_fields=["name", "creatorName"],
+            query_text=query_text,
+            page_size=page_size,
+            table_name="concept_set_fts",
+        )
 
     async def get_cohort_definition(
         self,
@@ -371,6 +572,89 @@ class WebApiClient:
         cohort_id: int,
     ) -> dict[str, Any]:
         r = await self._client.get(f"/cohortdefinition/{cohort_id}", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        row = self._normalize_cohort_definition_payload(r.json())
+        if not row:
+            return {}
+
+        row.pop("expression", None)
+        return row
+
+    async def get_concept_set_markdown(
+        self,
+        concept_set_id: int | None = None,
+        concept_set_expression: Any | None = None,
+    ) -> str:
+        concept_sets = await self._resolve_concept_set_payload(
+            concept_set_id=concept_set_id,
+            concept_set_expression=concept_set_expression,
+        )
+        return await self._get_print_friendly_markdown(
+            "/cohortdefinition/printfriendly/conceptsets?format=markdown",
+            concept_sets,
+        )
+
+    async def get_cohort_definition_markdown(
+        self,
+        cohort_id: int | None = None,
+        cohort_definition_expression: Any | None = None,
+        include_concept_sets: bool = True,
+    ) -> str:
+        expression = await self._resolve_cohort_expression(
+            cohort_id=cohort_id,
+            cohort_definition_expression=cohort_definition_expression,
+        )
+        cohort_markdown = await self._get_print_friendly_markdown(
+            "/cohortdefinition/printfriendly/cohort?format=markdown",
+            expression,
+        )
+
+        if not include_concept_sets:
+            return cohort_markdown
+
+        concept_sets = expression.get("ConceptSets")
+        if not isinstance(concept_sets, list) or not concept_sets:
+            return cohort_markdown
+
+        concept_set_markdown = await self._get_print_friendly_markdown(
+            "/cohortdefinition/printfriendly/conceptsets?format=markdown",
+            concept_sets,
+        )
+        if not concept_set_markdown:
+            return cohort_markdown
+
+        return f"{cohort_markdown.rstrip()}\n\n{concept_set_markdown.lstrip()}"
+
+    async def get_concept_set(
+        self,
+        concept_set_id: int,
+    ) -> Any:
+        r = await self._client.get(f"/conceptset/{concept_set_id}", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        row = self._normalize_cohort_definition_payload(r.json())
+        if not row:
+            return {}
+        return self._parse_expression(row.get("expression"))
+
+    async def get_concept_set_meta_data(
+        self,
+        concept_set_id: int,
+    ) -> dict[str, Any]:
+        r = await self._client.get(f"/conceptset/{concept_set_id}", headers=self._headers())
         if r.status_code == 401:
             raise WebApiError(
                 "WebAPI returned 401 (unauthorized). If your instance requires an "
