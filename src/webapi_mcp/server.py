@@ -38,7 +38,7 @@ def _get_client() -> WebApiClient:
 
 
 @mcp.tool()
-async def concept_search(
+async def search_concept(
     query: str = Field(..., description="Free-text search term, e.g. 'metformin'"),
     source_key: str | None = Field(
         None,
@@ -74,7 +74,7 @@ async def concept_search(
     page_size = min(page_size, settings.max_page_size)
     skey = source_key or settings.default_source_key
     try:
-        rows = await _get_client().concept_search(
+        rows = await _get_client().search_concept(
             query=query,
             source_key=skey,
             concept_class=concept_class,
@@ -94,7 +94,7 @@ async def concept_search(
 
 
 @mcp.tool()
-async def concept_record_count(
+async def get_concept_record_count(
     concept_ids: list[int] = Field(
         ...,
         description=(
@@ -112,10 +112,10 @@ async def concept_record_count(
     """Return CDM concept counts for each requested OMOP concept ID.
 
     Each returned row includes:
-    - recordCount
-    - recordCountWithDescendants
-    - personCount
-    - personCountWithDescendants
+    - record count
+    - record count with descendants
+    - person count
+    - person count with descendants
     """
     skey = source_key or settings.default_source_key
     try:
@@ -145,7 +145,7 @@ async def get_sources(
         ),
     ),
 ) -> list[dict]:
-    """List all configured WebAPI data sources and their attached daimons."""
+    """List all configured WebAPI data sources."""
     try:
         rows = await _get_client().get_sources(source_name=source_name)
     except WebApiError as e:

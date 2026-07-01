@@ -36,7 +36,7 @@ class WebApiClient:
             headers["X-API-KEY"] = key
         return headers
 
-    async def concept_search(
+    async def search_concept(
         self,
         query: str,
         source_key: str,
@@ -200,28 +200,10 @@ class WebApiClient:
             ):
                 continue
 
-            daimon_rows = row.get("daimons")
-            daimons: list[dict[str, Any]] = []
-            if isinstance(daimon_rows, list):
-                for daimon in daimon_rows:
-                    if not isinstance(daimon, dict):
-                        continue
-                    daimons.append(
-                        {
-                            "sourceDaimonId": daimon.get("sourceDaimonId"),
-                            "daimonType": daimon.get("daimonType"),
-                            "tableQualifier": daimon.get("tableQualifier"),
-                            "priority": daimon.get("priority"),
-                        }
-                    )
-
             sources.append(
                 {
-                    "sourceId": row.get("sourceId"),
                     "sourceName": row_source_name,
-                    "sourceDialect": row.get("sourceDialect"),
-                    "sourceKey": row.get("sourceKey"),
-                    "daimons": daimons,
+                    "sourceKey": row.get("sourceKey")
                 }
             )
 
