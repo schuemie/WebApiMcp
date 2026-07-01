@@ -1,6 +1,6 @@
 import contextlib
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
@@ -153,6 +153,67 @@ async def get_sources(
         raise RuntimeError(str(e)) from e
     log.info("get_sources filter=%r returned=%d", source_name, len(rows))
     return rows
+
+
+@mcp.tool()
+async def search_cohort_definition(
+    query: str = Field(
+        ...,
+        description=(
+            "Cohort definition ID or free-text query matched against cohort name "
+            "and creator name."
+        ),
+    ),
+    page_size: int = Field(
+        25, ge=1, description="Maximum number of rows to return.",
+    ),
+) -> list[dict]:
+    """Search cohort definitions by numeric ID or free text."""
+    page_size = min(page_size, settings.max_page_size)
+    try:
+        rows = await _get_client().search_cohort_definition(
+            query=query,
+            page_size=page_size,
+        )
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info(
+        "search_cohort_definition query=%r page_size=%d returned=%d",
+        query,
+        page_size,
+        len(rows),
+    )
+    return rows
+
+
+@mcp.tool()
+async def get_cohort_definition(
+    cohort_id: int = Field(..., description="Cohort definition ID."),
+) -> Any:
+    """Return the cohort definition expression (JSON) for the given cohort ID."""
+    try:
+        expression = await _get_client().get_cohort_definition(cohort_id=cohort_id)
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info("get_cohort_definition cohort_id=%d", cohort_id)
+    return expression
+
+
+@mcp.tool()
+async def get_cohort_definition_meta_data(
+    cohort_id: int = Field(..., description="Cohort definition ID."),
+) -> dict:
+    """Return cohort definition metadata including name, description (if present), creation and modification date,
+    and creator."""
+    try:
+        row = await _get_client().get_cohort_definition_meta_data(cohort_id=cohort_id)
+    except WebApiError as e:
+        # Surface a clean, actionable error to the agent
+        raise RuntimeError(str(e)) from e
+    log.info("get_cohort_definition_meta_data cohort_id=%d", cohort_id)
+    return row
 
 
 # ---- HTTP app wiring -----------------------------------------------------

@@ -1,4 +1,7 @@
 import httpx
+import json
+import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from .auth import current_api_key
@@ -35,6 +38,53 @@ class WebApiClient:
         if key:
             headers["X-API-KEY"] = key
         return headers
+
+    @staticmethod
+    def _scalar(value: Any) -> Any:
+        if isinstance(value, list) and value:
+            return value[0]
+        return value
+
+    @staticmethod
+    def _iso_utc_from_millis(value: Any) -> str | None:
+        scalar = WebApiClient._scalar(value)
+        if scalar is None:
+            return None
+        try:
+            millis = int(scalar)
+        except (TypeError, ValueError):
+            return None
+        dt = datetime.fromtimestamp(millis / 1000, tz=timezone.utc)
+        return dt.isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _normalize_cohort_definition_payload(payload: Any) -> dict[str, Any]:
+        # Some WebAPI deployments serialize the single-row response as
+        # a JSON string inside a list; normalize all forms to a dict.
+        if isinstance(payload, dict):
+            return payload
+
+        if isinstance(payload, list) and payload:
+            payload = payload[0]
+
+        if isinstance(payload, str):
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(parsed, dict):
+                return parsed
+
+        return {}
+
+    @staticmethod
+    def _parse_expression(value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
 
     async def search_concept(
         self,
@@ -128,8 +178,6 @@ class WebApiClient:
         source_key: str,
         concept_ids: list[int],
     ) -> list[dict[str, int]]:
-        # WebAPI exposes POST /cdmresults/{sourceKey}/conceptRecordCount with
-        # a raw JSON array body of concept IDs.
         url = f"/cdmresults/{source_key}/conceptRecordCount"
         r = await self._client.post(url, json=concept_ids, headers=self._headers())
         if r.status_code == 401:
@@ -208,4 +256,133 @@ class WebApiClient:
             )
 
         return sources
+
+    async def search_cohort_definition(
+        self,
+        query: str,
+        page_size: int,
+    ) -> list[dict[str, Any]]:
+        r = await self._client.get("/cohortdefinition", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        rows = r.json()
+        if not isinstance(rows, list):
+            return []
+
+        slim_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            cohort_id = self._scalar(row.get("id"))
+            try:
+                cohort_id = int(cohort_id)
+            except (TypeError, ValueError):
+                continue
+
+            created_by = row.get("createdBy")
+            creator_name = None
+            if isinstance(created_by, dict):
+                creator_name = self._scalar(created_by.get("name"))
+
+            slim_rows.append(
+                {
+                    "id": cohort_id,
+                    "name": self._scalar(row.get("name")),
+                    "dateCreated": self._iso_utc_from_millis(row.get("createdDate")),
+                    "dateUpdated": self._iso_utc_from_millis(row.get("modifiedDate")),
+                    "creatorName": creator_name,
+                }
+            )
+
+        query_text = query.strip()
+        if not query_text:
+            return []
+
+        try:
+            query_id = int(query_text)
+        except ValueError:
+            query_id = None
+
+        if query_id is not None:
+            return [row for row in slim_rows if row["id"] == query_id][:page_size]
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("CREATE VIRTUAL TABLE cohort_fts USING fts5(id UNINDEXED, name, creatorName)")
+            conn.executemany(
+                "INSERT INTO cohort_fts(id, name, creatorName) VALUES(?, ?, ?)",
+                [
+                    (
+                        row["id"],
+                        row["name"] if isinstance(row.get("name"), str) else "",
+                        row["creatorName"] if isinstance(row.get("creatorName"), str) else "",
+                    )
+                    for row in slim_rows
+                ],
+            )
+
+            tokens = [token for token in query_text.split() if token]
+            if not tokens:
+                return []
+
+            fts_query = " ".join(f'"{token.replace("\"", "\"\"")}"*' for token in tokens)
+            matched_ids = [
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT id FROM cohort_fts WHERE cohort_fts MATCH ? ORDER BY bm25(cohort_fts), id LIMIT ?",
+                    (fts_query, page_size),
+                )
+            ]
+        finally:
+            conn.close()
+
+        rank_by_id = {cohort_id: rank for rank, cohort_id in enumerate(matched_ids)}
+        matched = [row for row in slim_rows if row["id"] in rank_by_id]
+        matched.sort(key=lambda row: rank_by_id[row["id"]])
+        return matched[:page_size]
+
+    async def get_cohort_definition(
+        self,
+        cohort_id: int,
+    ) -> Any:
+        r = await self._client.get(f"/cohortdefinition/{cohort_id}", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        row = self._normalize_cohort_definition_payload(r.json())
+        if not row:
+            return {}
+        return self._parse_expression(row.get("expression"))
+
+    async def get_cohort_definition_meta_data(
+        self,
+        cohort_id: int,
+    ) -> dict[str, Any]:
+        r = await self._client.get(f"/cohortdefinition/{cohort_id}", headers=self._headers())
+        if r.status_code == 401:
+            raise WebApiError(
+                "WebAPI returned 401 (unauthorized). If your instance requires an "
+                "API key, set `X-WebAPI-Key` in mcp.json. If you already set one, "
+                "it may be disabled, expired, or unknown."
+            )
+        r.raise_for_status()
+
+        row = self._normalize_cohort_definition_payload(r.json())
+        if not row:
+            return {}
+
+        row.pop("expression", None)
+        return row
 
