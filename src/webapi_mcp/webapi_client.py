@@ -147,7 +147,8 @@ class WebApiClient:
             )
 
         if concept_set_id is not None:
-            r = await self._client.get(f"/conceptset/{concept_set_id}", headers=self._headers())
+            metadata = await self.get_concept_set_meta_data(concept_set_id=concept_set_id)
+            r = await self._client.get(f"/conceptset/{concept_set_id}/expression", headers=self._headers())
             if r.status_code == 401:
                 raise WebApiError(
                     "WebAPI returned 401 (unauthorized). If your instance requires an "
@@ -156,16 +157,13 @@ class WebApiClient:
                 )
             r.raise_for_status()
 
-            row = self._normalize_cohort_definition_payload(r.json())
-            if not row:
-                raise WebApiError("Concept set not found or empty response.")
-            expression = self._parse_expression(row.get("expression"))
+            expression = self._parse_expression(r.json())
             if not isinstance(expression, dict):
                 raise WebApiError("Concept set expression must be a JSON object.")
             return [
                 {
-                    "id": row.get("id", concept_set_id),
-                    "name": row.get("name") or f"Concept Set {concept_set_id}",
+                    "id": concept_set_id,
+                    "name": metadata.get("name"),
                     "expression": expression,
                 }
             ]
@@ -636,7 +634,7 @@ class WebApiClient:
         self,
         concept_set_id: int,
     ) -> Any:
-        r = await self._client.get(f"/conceptset/{concept_set_id}", headers=self._headers())
+        r = await self._client.get(f"/conceptset/{concept_set_id}/expression", headers=self._headers())
         if r.status_code == 401:
             raise WebApiError(
                 "WebAPI returned 401 (unauthorized). If your instance requires an "
@@ -645,10 +643,7 @@ class WebApiClient:
             )
         r.raise_for_status()
 
-        row = self._normalize_cohort_definition_payload(r.json())
-        if not row:
-            return {}
-        return self._parse_expression(row.get("expression"))
+        return self._parse_expression(r.json())
 
     async def get_concept_set_meta_data(
         self,
@@ -667,6 +662,5 @@ class WebApiClient:
         if not row:
             return {}
 
-        row.pop("expression", None)
         return row
 
